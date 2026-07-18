@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#0a0a0a" />
+<title>Flash Reader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Fraunces:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --ink: #f2ede4;
+    --ink-dim: #8a8578;
+    --ink-faint: #3a3833;
+    --phantom: #454239;
+    --accent: #ff2d2d;
+    --panel: #141311;
+    --line: #2a2824;
+    --amber: #e8b23a;
+    --chapter: #6ba9d8;
+    --scrub: #4a4842;
+    --scrub-bg: #1f1d1a;
+  }
+  :root[data-theme="light"] {
+    --bg: #faf7f0;
+    --ink: #1a1814;
+    --ink-dim: #7a7468;
+    --ink-faint: #c8c2b4;
+    --phantom: #b8b2a4;
+    --accent: #d91a1a;
+    --panel: #f2ede2;
+    --line: #e3ddd0;
+    --amber: #b8822a;
+    --chapter: #2d7ab0;
+    --scrub: #b8b0a0;
+    --scrub-bg: #ebe6d8;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%; width: 100%; overflow: hidden;
+    background: var(--bg); color: var(--ink);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    overscroll-behavior: none; touch-action: manipulation;
+    -webkit-user-select: none; user-select: none;
+    -webkit-font-smoothing: antialiased;
+    transition: background 0.25s ease, color 0.25s ease;
+  }
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+  .reader {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--bg);
+  }
+
+  .topbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-dim); flex-shrink: 0; }
+  .topbar .brand { display: flex; gap: 10px; align-items: center; min-width: 0; }
+  .topbar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); flex-shrink: 0; }
+  .topbar.paused .dot { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+  .topbar-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+  .topbar button, .topbar .icon-btn { background: none; border: none; color: var(--ink-dim); font: inherit; letter-spacing: 0.18em; text-transform: uppercase; padding: 6px 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+  .topbar button:active, .topbar .icon-btn:active { color: var(--ink); }
+  .icon-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  #bookTitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45vw; }
+  #bookTitle .sep { opacity: 0.4; margin: 0 6px; }
+
+  /* chapter label fades in on chapter change, then fades out */
+  .chapter-label {
+    position: absolute; top: 62px; left: 0; right: 0;
+    text-align: center;
+    font-family: 'Fraunces', serif; font-style: italic;
+    font-size: 13px; color: var(--ink-dim);
+    opacity: 0; transition: opacity 0.4s;
+    padding: 0 20px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    pointer-events: none;
+  }
+  .chapter-label.show { opacity: 0.85; }
+
+  .stage {
+    flex: 1;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+    position: relative;
+    padding: 0 16px;
+    min-height: 0;
+  }
+
+  /* anchor column marks */
+  .word-wrap {
+    position: relative;
+    width: 100%;
+    max-width: 100%;
+    height: 140px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .guide-top, .guide-bot { position: absolute; left: 50%; width: 1px; height: 14px; background: var(--ink-faint); transform: translateX(-0.5px); }
+  .guide-top { top: 18px; }
+  .guide-bot { bottom: 18px; }
+
+  /* Three word tracks — prev / current / next. All share the same pivot-column centering.
+     Each track has --pivot-offset set dynamically so its pivot lands at the horizontal center.
+     The prev/next tracks are translated horizontally off-screen relative to current. */
+  .word-track {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    font-family: 'Fraunces', 'Georgia', serif;
+    font-weight: 600;
+    font-size: clamp(44px, 10.5vw, 72px);
+    line-height: 1;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    --pivot-offset: 0px;
+    --track-shift: 0px;
+    transform: translate(calc(-50% + var(--pivot-offset) + var(--track-shift)), -50%);
+    will-change: transform;
+  }
+  .word-track.current { color: var(--ink); z-index: 2; }
+  .word-track.current .pivot { color: var(--accent); }
+  .word-track.prev, .word-track.next {
+    color: var(--phantom);
+    font-weight: 500;
+    font-size: clamp(26px, 6vw, 40px);
+    opacity: 0.75;
+    z-index: 1;
+  }
+  .word-track.prev .pivot, .word-track.next .pivot { color: var(--phantom); }
+  /* prev sits to the left of center, next to the right */
+  .word-track.prev { --track-shift: calc(-50vw + 25px); text-align: right; }
+  .word-track.next { --track-shift: calc(50vw - 25px); text-align: left; }
+
+  .hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--ink-dim); opacity: 0; transition: opacity 0.3s; pointer-events: none; text-align: center; line-height: 1.9; white-space: nowrap; }
+  .hint.show { opacity: 0.55; }
+
+  .speed-flash { position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%); font-family: 'JetBrains Mono', monospace; font-size: 44px; font-weight: 700; color: var(--amber); opacity: 0; pointer-events: none; letter-spacing: -0.02em; }
+  .speed-flash.show { animation: flashWpm 0.6s ease-out; }
+  @keyframes flashWpm {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+    30% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.1); }
+  }
+
+  .footer { flex-shrink: 0; padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .scrubber { position: relative; height: 32px; touch-action: none; cursor: pointer; }
+  .scrubber-track { position: absolute; top: 50%; left: 0; right: 0; height: 3px; transform: translateY(-50%); background: var(--scrub-bg); border-radius: 2px; }
+  .scrubber-fill { position: absolute; top: 50%; left: 0; height: 3px; transform: translateY(-50%); background: var(--ink); border-radius: 2px; width: 0%; pointer-events: none; }
+  .scrubber-thumb { position: absolute; top: 50%; left: 0; width: 14px; height: 14px; background: var(--accent); border: 2px solid var(--bg); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; box-shadow: 0 0 0 1px var(--accent); }
+  .scrubber-mark { position: absolute; top: 50%; width: 1px; height: 8px; background: var(--scrub); transform: translate(-50%, -50%); pointer-events: none; }
+  .scrubber-mark.chapter { width: 2px; height: 14px; background: var(--chapter); }
+  .scrubber-bookmark { position: absolute; top: 50%; width: 0; height: 0; transform: translate(-50%, calc(-50% - 10px)); pointer-events: none; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid var(--amber); }
+  .scrubber-tooltip { position: absolute; bottom: 28px; padding: 5px 8px; background: var(--ink); color: var(--bg); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.05em; border-radius: 3px; transform: translateX(-50%); pointer-events: none; opacity: 0; transition: opacity 0.15s; white-space: nowrap; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+  .scrubber-tooltip.show { opacity: 1; }
+  .scrubber-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; margin-left: -4px; border: 4px solid transparent; border-top-color: var(--ink); }
+
+  .stats { display: flex; justify-content: space-between; align-items: center; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-dim); }
+  .stats .center { display: flex; gap: 14px; align-items: center; }
+  .stats .wpm { color: var(--accent); font-weight: 700; }
+  .stats button { background: none; border: none; color: var(--ink-dim); font: inherit; letter-spacing: 0.2em; text-transform: uppercase; padding: 4px 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+  .stats button:active { color: var(--ink); }
+  .stats button svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linejoin: round; }
+  .stats button.active { color: var(--amber); }
+  .stats button.active svg { fill: var(--amber); stroke: var(--amber); }
+
+  .settings { position: fixed; inset: 0; background: var(--bg); display: none; flex-direction: column; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); overflow: hidden; }
+  .settings.open { display: flex; }
+  .settings-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px 8px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  .settings-head h1 { font-family: 'Fraunces', serif; font-style: italic; font-weight: 400; font-size: 22px; letter-spacing: -0.01em; }
+  .settings-head h1 span { color: var(--accent); }
+  .settings-head button { background: none; border: 1px solid var(--line); color: var(--ink); font: inherit; font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; padding: 9px 14px; border-radius: 3px; cursor: pointer; }
+  .settings-head button:active { background: var(--ink); color: var(--bg); }
+
+  .settings-body { flex: 1; overflow-y: auto; padding: 22px 20px 40px; -webkit-overflow-scrolling: touch; }
+  .field { margin-bottom: 26px; }
+  .field label { display: block; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 8px; }
+  .field label span { color: var(--accent); }
+  .field .hint-text { font-size: 11px; color: var(--ink-dim); font-family: 'Fraunces', serif; font-style: italic; margin-top: 6px; line-height: 1.5; }
+  .field .hint-text code { font-family: 'JetBrains Mono', monospace; font-style: normal; font-size: 10px; background: var(--panel); padding: 1px 5px; border-radius: 2px; color: var(--chapter); }
+  textarea { width: 100%; min-height: 220px; background: var(--panel); border: 1px solid var(--line); color: var(--ink); font-family: 'Fraunces', Georgia, serif; font-size: 16px; line-height: 1.5; padding: 14px; border-radius: 4px; resize: vertical; -webkit-user-select: text; user-select: text; }
+  textarea:focus { outline: none; border-color: var(--ink-dim); }
+
+  .slider-row { display: flex; align-items: center; gap: 14px; }
+  input[type="range"] { flex: 1; -webkit-appearance: none; appearance: none; height: 2px; background: var(--line); border-radius: 2px; outline: none; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 22px; height: 22px; border-radius: 50%; background: var(--ink); cursor: pointer; border: 3px solid var(--bg); box-shadow: 0 0 0 1px var(--ink); }
+  .value-box { min-width: 68px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--accent); font-weight: 700; }
+
+  .presets, .theme-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .preset, .theme-btn { background: none; border: 1px solid var(--line); color: var(--ink-dim); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; padding: 10px 14px; border-radius: 3px; cursor: pointer; }
+  .preset:active, .preset.active, .theme-btn:active, .theme-btn.active { color: var(--ink); border-color: var(--ink); }
+
+  .toggle-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .toggle-btn { background: none; border: 1px solid var(--line); color: var(--ink-dim); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; padding: 10px 14px; border-radius: 3px; cursor: pointer; }
+  .toggle-btn.on { color: var(--accent); border-color: var(--accent); }
+
+  .cheatsheet { margin-top: 10px; padding: 18px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+  .cheatsheet h3 { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
+  .cheatsheet ul { list-style: none; }
+  .cheatsheet li { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; line-height: 1.9; color: var(--ink-dim); }
+  .cheatsheet li strong { color: var(--ink); font-weight: 500; font-family: 'Fraunces', serif; font-style: italic; }
+
+  .sample-btn { display: inline-block; margin-top: 8px; background: none; border: none; color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; padding: 4px 10px 4px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 4px; }
+
+  .bookmarks-list { margin-top: 6px; display: flex; flex-direction: column; }
+  .bookmark-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12px; gap: 12px; }
+  .bookmark-item:last-child { border-bottom: none; }
+  .bookmark-label { flex: 1; color: var(--ink); font-family: 'Fraunces', serif; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .bookmark-pos { color: var(--ink-dim); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.1em; }
+  .bookmark-remove { background: none; border: none; color: var(--ink-dim); font-size: 18px; padding: 4px 8px; cursor: pointer; line-height: 1; }
+  .bookmark-remove:active { color: var(--accent); }
+  .bookmarks-empty { color: var(--ink-dim); font-size: 12px; font-style: italic; padding: 10px 0; }
+</style>
+</head>
+<body>
+
+<div class="reader" id="reader">
+  <div class="topbar" id="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <span id="bookTitle"><span id="status">READING</span></span>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="themeBtn" aria-label="Toggle theme">
+        <svg id="themeIcon" viewBox="0 0 24 24"></svg>
+      </button>
+      <button id="settingsBtn">Settings</button>
+    </div>
+  </div>
+
+  <div class="chapter-label" id="chapterLabel"></div>
+
+  <div class="stage" id="stage">
+    <div class="word-wrap">
+      <div class="guide-top"></div>
+      <div class="guide-bot"></div>
+      <div class="word-track prev" id="wordPrev"></div>
+      <div class="word-track current" id="wordCurrent">
+        <span class="before"></span><span class="pivot">T</span><span class="after">ap to start</span>
+      </div>
+      <div class="word-track next" id="wordNext"></div>
+    </div>
+
+    <div class="hint" id="hint">TAP — PAUSE · SWIPE ←→ PARAGRAPH · ↑↓ SPEED</div>
+    <div class="speed-flash" id="speedFlash"></div>
+  </div>
+
+  <div class="footer">
+    <div class="scrubber" id="scrubber">
+      <div class="scrubber-track"></div>
+      <div class="scrubber-fill" id="scrubFill"></div>
+      <div id="scrubMarks"></div>
+      <div id="scrubBookmarks"></div>
+      <div class="scrubber-thumb" id="scrubThumb"></div>
+      <div class="scrubber-tooltip" id="scrubTooltip"></div>
+    </div>
+    <div class="stats">
+      <span id="posText">0 / 0</span>
+      <div class="center">
+        <button id="bookmarkBtn" aria-label="Bookmark">
+          <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4V3z"/></svg>
+          <span>Mark</span>
+        </button>
+      </div>
+      <span class="wpm" id="wpmText">300 WPM</span>
+    </div>
+  </div>
+</div>
+
+<div class="settings" id="settings">
+  <div class="settings-head">
+    <h1>Flash<span>.</span>Reader</h1>
+    <button id="doneBtn">Done</button>
+  </div>
+  <div class="settings-body">
+
+    <div class="field">
+      <label>Text <span>*</span></label>
+      <textarea id="textInput" placeholder="Paste any plain text, or use @rsvp directives for chapters…"></textarea>
+      <div>
+        <button class="sample-btn" id="sampleBtn">Load sample →</button>
+        <button class="sample-btn" id="sampleRsvpBtn">Load @rsvp sample →</button>
+      </div>
+      <div class="hint-text">
+        Supports <code>@rsvp</code> directives: <code>@title</code>, <code>@author</code>, <code>@chapter Name</code>, <code>@para</code>.
+        Chapter markers appear in blue on the scrubber.
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Theme</label>
+      <div class="theme-row">
+        <button class="theme-btn" data-theme="dark">● Dark</button>
+        <button class="theme-btn" data-theme="light">○ Light</button>
+        <button class="theme-btn" data-theme="auto">Auto</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Speed — words per minute</label>
+      <div class="slider-row">
+        <input type="range" id="wpmSlider" min="100" max="900" step="25" value="300" />
+        <div class="value-box" id="wpmValue">300</div>
+      </div>
+      <div class="presets">
+        <button class="preset" data-wpm="200">200 · slow</button>
+        <button class="preset" data-wpm="300">300 · normal</button>
+        <button class="preset" data-wpm="450">450 · fast</button>
+        <button class="preset" data-wpm="600">600 · sprint</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Punctuation pause — extra time at commas & periods</label>
+      <div class="slider-row">
+        <input type="range" id="pauseSlider" min="0" max="100" step="5" value="40" />
+        <div class="value-box" id="pauseValue">40%</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Phantom words — dimmed preview of surrounding words</label>
+      <div class="toggle-row">
+        <button class="toggle-btn on" id="phantomBtn">● Show phantoms</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Bookmarks</label>
+      <div class="bookmarks-list" id="bookmarksList"></div>
+    </div>
+
+    <div class="cheatsheet">
+      <h3>Gestures</h3>
+      <ul>
+        <li><strong>Tap</strong><span>pause / resume</span></li>
+        <li><strong>Swipe ←</strong><span>previous paragraph</span></li>
+        <li><strong>Swipe →</strong><span>next paragraph</span></li>
+        <li><strong>Swipe ↑ / ↓</strong><span>speed ±25 wpm</span></li>
+        <li><strong>Long press</strong><span>restart from top</span></li>
+        <li><strong>Drag scrubber</strong><span>jump anywhere</span></li>
+        <li><strong>Mark button</strong><span>bookmark current spot</span></li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(() => {
+  const state = {
+    text: '',
+    title: '',
+    author: '',
+    words: [],         // array of strings
+    wordMeta: [],      // parallel array: { chapter: idx or -1, paraStart: bool, chapterStart: bool }
+    paraBreaks: [],    // word indices at which a paragraph begins (excluding 0)
+    chapters: [],      // [{ idx, name }]
+    bookmarks: [],
+    idx: 0,
+    wpm: 300,
+    pausePct: 40,
+    theme: 'dark',
+    showPhantoms: true,
+    playing: false,
+    timer: null,
+    lastChapter: -1,
+  };
+
+  const SAMPLE_PLAIN = `Rapid serial visual presentation, or RSVP, is a reading technique where words flash one at a time at a fixed point on screen. Because your eyes don't have to move across lines of text, you can read substantially faster than normal while maintaining comprehension — assuming the pace is right for you.
+
+Try starting around three hundred words per minute. Once that feels easy, nudge it up. Most people top out somewhere between four hundred fifty and six hundred; beyond that, comprehension tends to drop.
+
+Tap to pause whenever you need a beat. Swipe left or right to jump between paragraphs. Swipe up or down to adjust the pace on the fly. Drag the scrubber to jump anywhere, and tap Mark to save your place.`;
+
+  const SAMPLE_RSVP = `@rsvp 1
+@title On Reading Fast
+@author Anonymous
+@chapter The Premise
+Every reader begins somewhere. For most of us that place is slow, careful, and deliberate — which is exactly how reading should start.
+
+But the habits that protect a beginner become the cage of a fluent reader. The eyes linger. The inner voice lags. Comprehension outpaces delivery by a wide margin, and the gap is wasted time.
+
+@chapter The Technique
+RSVP solves this by removing eye movement entirely. Words arrive at a fixed point on screen. Your gaze never shifts. Your mind receives each word, attaches it to the growing sentence, and waits calmly for the next.
+
+At first the pace feels pushy. Within a few minutes it feels natural. Within a day you will catch yourself slowing the reader down because your mind has sped up past the setting.
+
+@chapter On Practice
+Start at three hundred words per minute. Stay there for an entire chapter before raising the speed. Raise it by twenty five. Repeat. The ceiling is not where comprehension fails — it is one notch below.`;
+
+  const $ = id => document.getElementById(id);
+  const settings = $('settings');
+  const wordCurrent = $('wordCurrent');
+  const wordPrev = $('wordPrev');
+  const wordNext = $('wordNext');
+  const statusEl = $('status'), topbar = $('topbar');
+  const bookTitleEl = $('bookTitle');
+  const chapterLabel = $('chapterLabel');
+  const posText = $('posText'), wpmText = $('wpmText');
+  const hint = $('hint'), speedFlash = $('speedFlash');
+  const textInput = $('textInput'), wpmSlider = $('wpmSlider'), wpmValue = $('wpmValue');
+  const pauseSlider = $('pauseSlider'), pauseValue = $('pauseValue');
+  const scrubber = $('scrubber'), scrubFill = $('scrubFill'), scrubThumb = $('scrubThumb');
+  const scrubMarks = $('scrubMarks'), scrubBookmarks = $('scrubBookmarks');
+  const scrubTooltip = $('scrubTooltip');
+  const bookmarkBtn = $('bookmarkBtn');
+  const bookmarksList = $('bookmarksList');
+  const phantomBtn = $('phantomBtn');
+
+  // ---------- PARSER ----------
+  // Supports plain text (paragraph-delimited by blank lines) OR @rsvp directive format.
+  function tokenize(text) {
+    const isRsvp = /^@rsvp\b/m.test(text);
+    if (isRsvp) return tokenizeRsvp(text);
+    return tokenizePlain(text);
+  }
+
+  function splitWord(w) {
+    // soft-break very long words
+    if (w.length <= 13) return [w];
+    const parts = [];
+    let rest = w;
+    while (rest.length > 13) {
+      let cut = 12;
+      const hy = rest.indexOf('-', 4);
+      if (hy > 0 && hy < 13) cut = hy + 1;
+      parts.push(rest.slice(0, cut) + (rest[cut-1] === '-' ? '' : '-'));
+      rest = rest.slice(cut);
+    }
+    parts.push(rest);
+    return parts;
+  }
+
+  function tokenizePlain(text) {
+    const paras = text.split(/\n\s*\n+/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const words = [], meta = [], breaks = [];
+    paras.forEach((p, pIdx) => {
+      const raw = p.split(' ').filter(Boolean);
+      if (pIdx > 0 && words.length) breaks.push(words.length);
+      raw.forEach((w, wIdx) => {
+        for (const part of splitWord(w)) {
+          words.push(part);
+          meta.push({ chapter: -1, paraStart: wIdx === 0 && pIdx > 0, chapterStart: false });
+        }
+      });
+    });
+    return { words, meta, breaks, chapters: [], title: '', author: '' };
+  }
+
+  function tokenizeRsvp(text) {
+    const lines = text.split(/\r?\n/);
+    const words = [], meta = [], breaks = [], chapters = [];
+    let title = '', author = '';
+    let chapterIdx = -1;
+    let pendingParaBreak = false;
+    let pendingChapter = null;
+    let lastWasBlank = true;
+
+    for (let raw of lines) {
+      const line = raw.trim();
+      if (!line) { lastWasBlank = true; continue; }
+      // directive?
+      const m = line.match(/^@(\w+)(?:\s+(.*))?$/);
+      if (m) {
+        const tag = m[1].toLowerCase();
+        const val = (m[2] || '').trim();
+        if (tag === 'rsvp') { /* version marker, ignore */ }
+        else if (tag === 'title')  title = val;
+        else if (tag === 'author') author = val;
+        else if (tag === 'source') { /* ignore */ }
+        else if (tag === 'chapter') {
+          chapterIdx++;
+          // mark pending; will apply to the next word we push
+          pendingChapter = { name: val, idx: -1 };
+          pendingParaBreak = true;
+        } else if (tag === 'para') {
+          pendingParaBreak = true;
+        }
+        lastWasBlank = false;
+        continue;
+      }
+      // body line
+      if (lastWasBlank && words.length) pendingParaBreak = true;
+      const rawWords = line.split(/\s+/).filter(Boolean);
+      rawWords.forEach((w, wIdx) => {
+        const parts = splitWord(w);
+        parts.forEach((part, pi) => {
+          const isFirstOfLine = wIdx === 0 && pi === 0;
+          const paraStart = pendingParaBreak && isFirstOfLine;
+          const chapterStart = pendingChapter !== null && isFirstOfLine;
+          if (chapterStart) {
+            pendingChapter.idx = words.length;
+            chapters.push(pendingChapter);
+            pendingChapter = null;
+          }
+          if (paraStart && words.length) breaks.push(words.length);
+          words.push(part);
+          meta.push({
+            chapter: chapterIdx,
+            paraStart: paraStart,
+            chapterStart: chapterStart,
+          });
+          if (isFirstOfLine) pendingParaBreak = false;
+        });
+      });
+      lastWasBlank = false;
+    }
+    return { words, meta, breaks, chapters, title, author };
+  }
+
+  function pivotIndex(word) {
+    const clean = word.replace(/[^\p{L}\p{N}]/gu, '');
+    const n = clean.length;
+    if (n <= 1) return 0;
+    if (n <= 3) return 1;
+    if (n <= 5) return 1;
+    if (n <= 9) return 2;
+    if (n <= 13) return 3;
+    return 4;
+  }
+
+  function splitAtPivot(word) {
+    const p = pivotIndex(word);
+    let letterCount = 0, pivotRaw = 0;
+    for (let i = 0; i < word.length; i++) {
+      if (/[\p{L}\p{N}]/u.test(word[i])) {
+        if (letterCount === p) { pivotRaw = i; break; }
+        letterCount++;
+      }
+    }
+    return {
+      before: word.slice(0, pivotRaw),
+      pivot:  word[pivotRaw] || '',
+      after:  word.slice(pivotRaw + 1),
+    };
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ---------- WORD RENDERING ----------
+  // Renders a word into a track element, measures the pivot, and sets --pivot-offset.
+  // For the current track it also scales font-size down if the word would overflow.
+  function renderTrack(trackEl, word, isCurrent) {
+    if (!word) { trackEl.innerHTML = ''; trackEl.style.setProperty('--pivot-offset', '0px'); return; }
+    const parts = splitAtPivot(word);
+    trackEl.innerHTML =
+      '<span class="before">' + escapeHtml(parts.before) + '</span>' +
+      '<span class="pivot">' + escapeHtml(parts.pivot) + '</span>' +
+      '<span class="after">' + escapeHtml(parts.after) + '</span>';
+    trackEl.style.fontSize = '';
+    requestAnimationFrame(() => {
+      const pivotEl = trackEl.querySelector('.pivot');
+      if (!pivotEl) return;
+      const stage = $('stage');
+      const stageWidth = stage.clientWidth;
+      const PADDING = 24;
+      const maxHalf = (stageWidth - PADDING * 2) / 2;
+      let trackRect = trackEl.getBoundingClientRect();
+      let pivotRect = pivotEl.getBoundingClientRect();
+      const pivotCenter = pivotRect.left + pivotRect.width / 2;
+      const leftHalf  = pivotCenter - trackRect.left;
+      const rightHalf = trackRect.right - pivotCenter;
+      const widestHalf = Math.max(leftHalf, rightHalf);
+      if (isCurrent && widestHalf > maxHalf) {
+        const scale = maxHalf / widestHalf;
+        const cs = parseFloat(getComputedStyle(trackEl).fontSize);
+        const newSize = Math.max(22, cs * scale);
+        trackEl.style.fontSize = newSize + 'px';
+        trackRect = trackEl.getBoundingClientRect();
+        pivotRect = pivotEl.getBoundingClientRect();
+      }
+      const newPivotCenter = pivotRect.left + pivotRect.width / 2;
+      const newPivotCenterInTrack = newPivotCenter - trackRect.left;
+      const offset = (trackRect.width / 2) - newPivotCenterInTrack;
+      trackEl.style.setProperty('--pivot-offset', offset + 'px');
+    });
+  }
+
+  function renderWordStack() {
+    const i = state.idx;
+    const cur = state.words[i] || '';
+    const prv = i > 0 ? state.words[i - 1] : '';
+    const nxt = i + 1 < state.words.length ? state.words[i + 1] : '';
+    renderTrack(wordCurrent, cur, true);
+    if (state.showPhantoms) {
+      renderTrack(wordPrev, prv, false);
+      renderTrack(wordNext, nxt, false);
+      wordPrev.style.display = '';
+      wordNext.style.display = '';
+    } else {
+      wordPrev.style.display = 'none';
+      wordNext.style.display = 'none';
+    }
+    // chapter label
+    const m = state.wordMeta[i];
+    if (m && m.chapter !== state.lastChapter && m.chapter >= 0 && state.chapters[m.chapter]) {
+      state.lastChapter = m.chapter;
+      chapterLabel.textContent = state.chapters[m.chapter].name;
+      chapterLabel.classList.add('show');
+      clearTimeout(chapterLabel._t);
+      chapterLabel._t = setTimeout(() => chapterLabel.classList.remove('show'), 2500);
+    }
+  }
+
+  // ---------- STATS / SCRUBBER ----------
+  function renderStats() {
+    const total = state.words.length;
+    posText.textContent = state.idx + ' / ' + total;
+    wpmText.textContent = state.wpm + ' WPM';
+    renderScrubber();
+    updateBookmarkBtnState();
+  }
+
+  function renderScrubber() {
+    const total = Math.max(1, state.words.length);
+    const pct = 100 * state.idx / total;
+    scrubFill.style.width = pct + '%';
+    scrubThumb.style.left = pct + '%';
+    scrubMarks.innerHTML = '';
+    // paragraph marks (thin)
+    state.paraBreaks.forEach(bi => {
+      // skip marks that coincide with chapters so we don't double up
+      if (state.chapters.some(c => c.idx === bi)) return;
+      const m = document.createElement('div');
+      m.className = 'scrubber-mark';
+      m.style.left = (100 * bi / total) + '%';
+      scrubMarks.appendChild(m);
+    });
+    // chapter marks (taller, blue)
+    state.chapters.forEach(c => {
+      if (c.idx <= 0) return;
+      const m = document.createElement('div');
+      m.className = 'scrubber-mark chapter';
+      m.style.left = (100 * c.idx / total) + '%';
+      scrubMarks.appendChild(m);
+    });
+    scrubBookmarks.innerHTML = '';
+    state.bookmarks.forEach(bm => {
+      const b = document.createElement('div');
+      b.className = 'scrubber-bookmark';
+      b.style.left = (100 * bm.idx / total) + '%';
+      scrubBookmarks.appendChild(b);
+    });
+  }
+
+  function scrubPctFromEvent(e) {
+    const rect = scrubber.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    return Math.max(0, Math.min(1, x / rect.width));
+  }
+  function previewAt(pct) {
+    const total = state.words.length;
+    if (!total) return;
+    const targetIdx = Math.min(total - 1, Math.floor(pct * total));
+    // if near a chapter, show its name; else show the word
+    const nearChap = state.chapters.find(c => Math.abs(c.idx - targetIdx) < Math.max(3, total * 0.01));
+    scrubTooltip.textContent = nearChap ? '❖ ' + nearChap.name : (state.words[targetIdx] || '');
+    scrubTooltip.style.left = (pct * 100) + '%';
+    scrubTooltip.classList.add('show');
+  }
+  function commitScrub(pct) {
+    const total = state.words.length;
+    if (!total) return;
+    state.idx = Math.min(total - 1, Math.floor(pct * total));
+    renderWordStack();
+    renderStats();
+  }
+
+  let scrubbing = false, wasPlaying = false;
+  scrubber.addEventListener('touchstart', e => {
+    scrubbing = true; wasPlaying = state.playing;
+    if (state.playing) pause();
+    const pct = scrubPctFromEvent(e);
+    previewAt(pct); commitScrub(pct); e.preventDefault();
+  }, { passive: false });
+  scrubber.addEventListener('touchmove', e => {
+    if (!scrubbing) return;
+    const pct = scrubPctFromEvent(e);
+    previewAt(pct); commitScrub(pct); e.preventDefault();
+  }, { passive: false });
+  scrubber.addEventListener('touchend', () => {
+    if (!scrubbing) return;
+    scrubbing = false;
+    scrubTooltip.classList.remove('show');
+    if (wasPlaying) play();
+  });
+  scrubber.addEventListener('mousedown', e => {
+    scrubbing = true; wasPlaying = state.playing;
+    if (state.playing) pause();
+    const pct = scrubPctFromEvent(e);
+    previewAt(pct); commitScrub(pct);
+  });
+  window.addEventListener('mousemove', e => {
+    if (!scrubbing) return;
+    const pct = scrubPctFromEvent(e);
+    previewAt(pct); commitScrub(pct);
+  });
+  window.addEventListener('mouseup', () => {
+    if (!scrubbing) return;
+    scrubbing = false;
+    scrubTooltip.classList.remove('show');
+    if (wasPlaying) play();
+  });
+
+  // ---------- PLAYBACK ----------
+  function baseInterval() { return 60000 / state.wpm; }
+  function wordDelay(word, idx) {
+    let t = baseInterval();
+    const len = word.replace(/[^\p{L}\p{N}]/gu, '').length;
+    if (len >= 8) t *= 1.15;
+    if (len >= 12) t *= 1.25;
+    if (/[,;:—–-]$/.test(word)) t *= 1 + state.pausePct / 100 * 0.5;
+    if (/[.!?]$/.test(word))    t *= 1 + state.pausePct / 100;
+    // extra pause at paragraph/chapter boundaries
+    const nextMeta = state.wordMeta[idx + 1];
+    if (nextMeta && nextMeta.paraStart)    t *= 1 + state.pausePct / 100;
+    if (nextMeta && nextMeta.chapterStart) t *= 1 + state.pausePct / 100 * 1.5;
+    return t;
+  }
+
+  function tick() {
+    if (!state.playing) return;
+    if (state.idx >= state.words.length) {
+      pause();
+      statusEl.textContent = 'DONE';
+      return;
+    }
+    const w = state.words[state.idx];
+    renderWordStack();
+    renderStats();
+    const delay = wordDelay(w, state.idx);
+    state.timer = setTimeout(() => { state.idx++; tick(); }, delay);
+  }
+
+  function play() {
+    if (!state.words.length) { openSettings(); return; }
+    if (state.idx >= state.words.length) state.idx = 0;
+    state.playing = true;
+    statusEl.textContent = 'READING';
+    topbar.classList.remove('paused');
+    hideHint();
+    tick();
+  }
+  function pause() {
+    state.playing = false;
+    statusEl.textContent = 'PAUSED';
+    topbar.classList.add('paused');
+    clearTimeout(state.timer);
+    showHint();
+    renderWordStack();
+    persist();
+  }
+  function toggle() { state.playing ? pause() : play(); }
+
+  function setIdx(i) {
+    state.idx = Math.max(0, Math.min(state.words.length - 1, i));
+    state.lastChapter = -1; // allow chapter label to re-announce
+    renderWordStack();
+    renderStats();
+  }
+
+  // jump to start of previous / next paragraph
+  function jumpParagraph(dir) {
+    if (!state.words.length) return;
+    // boundary points: 0, each paraBreak, and each chapter.idx (they may overlap)
+    const stops = Array.from(new Set([0, ...state.paraBreaks, ...state.chapters.map(c => c.idx)])).sort((a, b) => a - b);
+    const cur = state.idx;
+    if (dir > 0) {
+      // next paragraph start
+      const nxt = stops.find(s => s > cur);
+      setIdx(nxt != null ? nxt : state.words.length - 1);
+    } else {
+      // previous paragraph start (if we're already past the first few words of current para, go to its start; else go to previous)
+      // find the paragraph start <= cur
+      let curStart = 0;
+      for (const s of stops) if (s <= cur) curStart = s; else break;
+      if (cur - curStart > 2) {
+        setIdx(curStart); // back to start of current paragraph
+      } else {
+        // go to previous paragraph
+        let prevStart = 0;
+        for (const s of stops) if (s < curStart) prevStart = s; else break;
+        setIdx(prevStart);
+      }
+    }
+  }
+
+  function adjustWpm(delta) {
+    state.wpm = Math.max(100, Math.min(900, state.wpm + delta));
+    wpmSlider.value = state.wpm;
+    wpmValue.textContent = state.wpm;
+    renderStats();
+    flashSpeed();
+    document.querySelectorAll('.preset').forEach(p => {
+      p.classList.toggle('active', parseInt(p.dataset.wpm) === state.wpm);
+    });
+  }
+  function flashSpeed() {
+    speedFlash.textContent = state.wpm;
+    speedFlash.classList.remove('show');
+    void speedFlash.offsetWidth;
+    speedFlash.classList.add('show');
+  }
+  let hintTimer;
+  function showHint() { hint.classList.add('show'); clearTimeout(hintTimer); hintTimer = setTimeout(() => hint.classList.remove('show'), 3500); }
+  function hideHint() { hint.classList.remove('show'); clearTimeout(hintTimer); }
+
+  // ---------- GESTURES ----------
+  const stage = $('stage');
+  let touchStart = null, longPressTimer = null, didLongPress = false, didSwipe = false;
+
+  stage.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    touchStart = { x: t.clientX, y: t.clientY, time: Date.now() };
+    didLongPress = false; didSwipe = false;
+    longPressTimer = setTimeout(() => {
+      didLongPress = true;
+      setIdx(0);
+      if (navigator.vibrate) navigator.vibrate(30);
+    }, 700);
+  }, { passive: true });
+  stage.addEventListener('touchmove', e => {
+    if (!touchStart) return;
+    const t = e.touches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) clearTimeout(longPressTimer);
+  }, { passive: true });
+  stage.addEventListener('touchend', e => {
+    clearTimeout(longPressTimer);
+    if (!touchStart || didLongPress) { touchStart = null; return; }
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    const absX = Math.abs(dx), absY = Math.abs(dy);
+    const SWIPE = 40;
+    if (absX > SWIPE && absX > absY) {
+      didSwipe = true;
+      if (dx < 0) jumpParagraph(-1); else jumpParagraph(1);
+    } else if (absY > SWIPE && absY > absX) {
+      didSwipe = true;
+      if (dy < 0) adjustWpm(25); else adjustWpm(-25);
+    }
+    if (!didSwipe) toggle();
+    touchStart = null;
+  }, { passive: true });
+
+  window.addEventListener('keydown', e => {
+    if (settings.classList.contains('open')) return;
+    if (e.key === ' ') { e.preventDefault(); toggle(); }
+    else if (e.key === 'ArrowLeft')  jumpParagraph(-1);
+    else if (e.key === 'ArrowRight') jumpParagraph(1);
+    else if (e.key === 'ArrowUp')    { e.preventDefault(); adjustWpm(25); }
+    else if (e.key === 'ArrowDown')  { e.preventDefault(); adjustWpm(-25); }
+    else if (e.key === 'b' || e.key === 'B') toggleBookmark();
+  });
+
+  // ---------- BOOKMARKS ----------
+  function toggleBookmark() {
+    if (!state.words.length) return;
+    const existing = state.bookmarks.findIndex(b => Math.abs(b.idx - state.idx) < 3);
+    if (existing >= 0) {
+      state.bookmarks.splice(existing, 1);
+    } else {
+      const label = (state.words.slice(state.idx, state.idx + 5).join(' ') || 'mark').slice(0, 60);
+      state.bookmarks.push({ idx: state.idx, label });
+      state.bookmarks.sort((a, b) => a.idx - b.idx);
+    }
+    renderStats();
+    renderBookmarksList();
+    persist();
+  }
+  function updateBookmarkBtnState() {
+    const near = state.bookmarks.some(b => Math.abs(b.idx - state.idx) < 3);
+    bookmarkBtn.classList.toggle('active', near);
+  }
+  function renderBookmarksList() {
+    bookmarksList.innerHTML = '';
+    if (!state.bookmarks.length) {
+      const e = document.createElement('div');
+      e.className = 'bookmarks-empty';
+      e.textContent = 'No bookmarks yet. Tap Mark in the reader to save a spot.';
+      bookmarksList.appendChild(e);
+      return;
+    }
+    state.bookmarks.forEach((bm, i) => {
+      const item = document.createElement('div');
+      item.className = 'bookmark-item';
+      const lbl = document.createElement('span');
+      lbl.className = 'bookmark-label';
+      lbl.textContent = '"' + bm.label + '…"';
+      lbl.onclick = () => { setIdx(bm.idx); closeSettings(); };
+      const pos = document.createElement('span');
+      pos.className = 'bookmark-pos';
+      pos.textContent = bm.idx;
+      const rm = document.createElement('button');
+      rm.className = 'bookmark-remove';
+      rm.textContent = '×';
+      rm.onclick = () => {
+        state.bookmarks.splice(i, 1);
+        renderBookmarksList();
+        renderStats();
+        persist();
+      };
+      item.appendChild(lbl);
+      item.appendChild(pos);
+      item.appendChild(rm);
+      bookmarksList.appendChild(item);
+    });
+  }
+  bookmarkBtn.addEventListener('click', toggleBookmark);
+
+  // ---------- THEME ----------
+  const SUN = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>';
+  const MOON = '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>';
+  function resolvedTheme() {
+    if (state.theme === 'auto') return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    return state.theme;
+  }
+  function applyTheme() {
+    const t = resolvedTheme();
+    document.documentElement.setAttribute('data-theme', t);
+    document.querySelector('meta[name="theme-color"]').setAttribute('content', t === 'light' ? '#faf7f0' : '#0a0a0a');
+    $('themeIcon').innerHTML = t === 'light' ? SUN : MOON;
+    document.querySelectorAll('.theme-btn').forEach(b => b.classList.toggle('active', b.dataset.theme === state.theme));
+  }
+  function cycleTheme() {
+    state.theme = resolvedTheme() === 'dark' ? 'light' : 'dark';
+    applyTheme();
+    persist();
+  }
+  $('themeBtn').addEventListener('click', cycleTheme);
+  document.querySelectorAll('.theme-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      state.theme = b.dataset.theme;
+      applyTheme();
+      persist();
+    });
+  });
+  const mql = window.matchMedia('(prefers-color-scheme: light)');
+  if (mql.addEventListener) mql.addEventListener('change', () => { if (state.theme === 'auto') applyTheme(); });
+
+  // ---------- PHANTOMS TOGGLE ----------
+  function updatePhantomBtn() {
+    phantomBtn.classList.toggle('on', state.showPhantoms);
+    phantomBtn.textContent = state.showPhantoms ? '● Show phantoms' : '○ Hide phantoms';
+  }
+  phantomBtn.addEventListener('click', () => {
+    state.showPhantoms = !state.showPhantoms;
+    updatePhantomBtn();
+    renderWordStack();
+    persist();
+  });
+
+  // ---------- SETTINGS ----------
+  function openSettings() {
+    pause();
+    textInput.value = state.text;
+    wpmSlider.value = state.wpm;
+    wpmValue.textContent = state.wpm;
+    pauseSlider.value = state.pausePct;
+    pauseValue.textContent = state.pausePct + '%';
+    settings.classList.add('open');
+    document.querySelectorAll('.preset').forEach(p => p.classList.toggle('active', parseInt(p.dataset.wpm) === state.wpm));
+    updatePhantomBtn();
+    applyTheme();
+    renderBookmarksList();
+  }
+  function closeSettings() {
+    const newText = textInput.value.trim();
+    const changed = newText !== state.text;
+    state.text = newText;
+    if (changed) loadText(newText, true);
+    state.wpm = parseInt(wpmSlider.value);
+    state.pausePct = parseInt(pauseSlider.value);
+    settings.classList.remove('open');
+    renderStats();
+    if (state.words.length) {
+      renderWordStack();
+    } else {
+      wordCurrent.innerHTML = '<span class="before"></span><span class="pivot">T</span><span class="after">ap to start</span>';
+      wordPrev.innerHTML = ''; wordNext.innerHTML = '';
+    }
+    showHint();
+    persist();
+  }
+
+  function loadText(text, resetPos) {
+    const { words, meta, breaks, chapters, title, author } = tokenize(text);
+    state.words = words;
+    state.wordMeta = meta;
+    state.paraBreaks = breaks;
+    state.chapters = chapters;
+    state.title = title;
+    state.author = author;
+    state.lastChapter = -1;
+    if (resetPos) {
+      state.idx = 0;
+      state.bookmarks = [];
+    }
+    updateBookTitle();
+  }
+
+  function updateBookTitle() {
+    if (state.title) {
+      let html = '<span style="color: var(--ink); font-family: Fraunces, serif; font-style: italic; text-transform: none; letter-spacing: 0; font-size: 13px;">' + escapeHtml(state.title) + '</span>';
+      if (state.author) html += '<span class="sep">·</span>' + escapeHtml(state.author);
+      bookTitleEl.innerHTML = html;
+    } else {
+      bookTitleEl.innerHTML = '<span id="status">' + (state.playing ? 'READING' : 'PAUSED') + '</span>';
+    }
+  }
+
+  function persist() {
+    try {
+      localStorage.setItem('rsvp', JSON.stringify({
+        text: state.text, wpm: state.wpm, pausePct: state.pausePct,
+        idx: state.idx, theme: state.theme, bookmarks: state.bookmarks,
+        showPhantoms: state.showPhantoms,
+      }));
+    } catch(e) {}
+  }
+
+  $('settingsBtn').addEventListener('click', openSettings);
+  $('doneBtn').addEventListener('click', closeSettings);
+
+  wpmSlider.addEventListener('input', () => {
+    wpmValue.textContent = wpmSlider.value;
+    document.querySelectorAll('.preset').forEach(p => p.classList.toggle('active', parseInt(p.dataset.wpm) === parseInt(wpmSlider.value)));
+  });
+  pauseSlider.addEventListener('input', () => { pauseValue.textContent = pauseSlider.value + '%'; });
+  document.querySelectorAll('.preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      wpmSlider.value = btn.dataset.wpm;
+      wpmValue.textContent = btn.dataset.wpm;
+      document.querySelectorAll('.preset').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+  $('sampleBtn').addEventListener('click', () => { textInput.value = SAMPLE_PLAIN; textInput.focus(); });
+  $('sampleRsvpBtn').addEventListener('click', () => { textInput.value = SAMPLE_RSVP; textInput.focus(); });
+
+  let resizeT;
+  window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => renderWordStack(), 100); });
+
+  // ---------- BOOT ----------
+  function boot() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('rsvp') || 'null'); } catch(e) {}
+    if (saved) {
+      state.text = saved.text || '';
+      state.wpm = saved.wpm || 300;
+      state.pausePct = typeof saved.pausePct === 'number' ? saved.pausePct : 40;
+      state.theme = saved.theme || 'dark';
+      state.bookmarks = Array.isArray(saved.bookmarks) ? saved.bookmarks : [];
+      state.showPhantoms = saved.showPhantoms !== false;
+      loadText(state.text, false);
+      state.idx = Math.min(saved.idx || 0, Math.max(0, state.words.length - 1));
+    }
+    applyTheme();
+    renderStats();
+    updatePhantomBtn();
+    if (!state.words.length) {
+      setTimeout(openSettings, 100);
+    } else {
+      renderWordStack();
+      showHint();
+    }
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

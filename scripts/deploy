@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Deploy Flash Reader → demo.justintormey.com/rsvp-reader/
+#
+# Publishes this repo's static files to the `<prefix>/` key in the SHARED
+# S3 bucket `s3://justintormey.com` (fronted by CloudFront on
+# demo.justintormey.com), then invalidates that prefix.
+#
+# Config lives in .local/deploy.json (gitignored): aws_profile, cloudfront_id, s3_prefix.
+#
+# Usage:
+#   ./scripts/deploy --dry-run   # show what would change
+#   ./scripts/deploy             # apply
+#
+# NOTE: additive sync, NO --delete. The bucket is shared with sibling demos
+# (leftright/, retro/, sketchbook/, drift/, ...); never run a delete against it.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEPLOY_CONFIG="$SOURCE_DIR/.local/deploy.json"
+
+if [ ! -f "$DEPLOY_CONFIG" ]; then
+  echo "ERROR: deploy config missing: $DEPLOY_CONFIG" >&2
+  exit 1
+fi
+
+read_cfg() { /usr/bin/python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['$1'])" "$DEPLOY_CONFIG"; }
+AWS_PROFILE=$(read_cfg aws_profile)
+CF_ID=$(read_cfg cloudfront_id)
+S3_PREFIX=$(read_cfg s3_prefix)
+
+S3_PATH="s3://justintormey.com/${S3_PREFIX}"
+
+EXCLUDES=(
+  --exclude ".git/*" --exclude ".local/*" --exclude "scripts/*"
+  --exclude "README.md" --exclude "CLAUDE.md" --exclude "history.md"
+  --exclude ".gitignore" --exclude ".DS_Store" --exclude "*.swp"
+)
+
+DRY_RUN=""
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY_RUN="--dryrun"
+  echo "── DRY RUN ──"
+fi
+
+echo "Source    : $SOURCE_DIR"
+echo "Target    : $S3_PATH/"
+echo "Profile   : $AWS_PROFILE"
+echo "CloudFront: $CF_ID"
+echo
+
+aws s3 sync "$SOURCE_DIR/" "$S3_PATH/" \
+  --profile "$AWS_PROFILE" \
+  "${EXCLUDES[@]}" \
+  $DRY_RUN
+
+if [ -n "$DRY_RUN" ]; then
+  echo
+  echo "DRY RUN — no CloudFront invalidation. Re-run without --dry-run to apply."
+  exit 0
+fi
+
+echo
+echo "Creating CloudFront invalidation for /${S3_PREFIX}/* ..."
+aws cloudfront create-invalidation \
+  --distribution-id "$CF_ID" \
+  --paths "/${S3_PREFIX}/*" \
+  --profile "$AWS_PROFILE" \
+  --query 'Invalidation.{Id:Id,Status:Status}' --output table
+
+echo
+echo "Done → https://demo.justintormey.com/${S3_PREFIX}/"

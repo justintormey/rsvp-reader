@@ -1,0 +1,12 @@
+# Deploy config (AWS profile + CloudFront id) — local only, never commit
+.local/
+
+# macOS
+.DS_Store
+._*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
